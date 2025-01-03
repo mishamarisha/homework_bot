@@ -51,10 +51,9 @@ def check_tokens():
     }
     missing_vars = [name for name, value in env_vars.items() if not value]
     if missing_vars:
-        for var in missing_vars:
-            logging.critical(f'Переменная окружения "{var}" недоступна.')
-        return False
-    return True
+        logging.critical(
+            f'Переменные окружения окружения "{missing_vars}" недоступны.')
+    return missing_vars
 
 
 def send_message(bot, message):
@@ -66,12 +65,7 @@ def send_message(bot, message):
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
     except apihelper.ApiException as error:
-        if "Bad Request" in str(error):
-            logger.error(f'Некорректные параметры запроса: {error}')
-        else:
-            logger.error(f'Ошибка при обращении к Telegram API: {error}')
-    except apihelper.ApiException as error:
-        logger.error(f'Ошибка при отправке сообщения в Telegram API: {error}')
+        logger.error(f'Ошибка при обращении к Telegram API: {error}')
     else:
         logger.debug(f'Сообщение отправлено: {message}')
 
@@ -86,49 +80,35 @@ def get_api_answer(timestamp):
                 'Эндпоинт вернул ошибку: '
                 f'{response.status_code}, {response.text}'
             )
-            logger.error(error_message)
             raise requests.HTTPError(error_message)
-    except requests.RequestException as error:
-        message = f'Ошибка при запросе к API: {error}'
-        logger.error(message)
-        raise RuntimeError(message) from error
-    try:
         return response.json()
-    except json.JSONDecodeError as error:
-        logger.error(
-            f'Ошибка декодирования JSON: {error}. '
-            f'Ответ от сервера: {response.text}'
-        )
-        raise ValueError('Ошибка при декодировании JSON-ответа') from error
     except requests.RequestException as error:
-        logger.error(f'Ошибка при запросе к API: {error}')
-        raise RuntimeError('Ошибка при запросе к API Практикума') from error
+        raise RuntimeError(f'Ошибка при запросе к API: {error}') from error
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f'Ошибка при декодировании JSON-ответа: {error}') from error
 
 
 def check_response(response):
     """Проверяет ответ сервера."""
     if not isinstance(response, dict):
-        logger.error('Ответ API не является словарем.')
         raise TypeError('Ответ API не является словарем.')
 
     if 'homeworks' not in response:
-        logger.error('Ответ сервера не содержит ключа "homeworks".')
         raise KeyError('Ответ сервера не содержит ключа "homeworks".')
 
     if 'current_date' not in response:
-        logger.warning('Ответ сервера не содержит ключа "current_date".')
+        raise KeyError('Ответ сервера не содержит ключа "current_date".')
     else:
         if not isinstance(response['current_date'], (int)):
             message = (
                 f'Значение ключа "current_date" должно быть числом, '
                 f'получено {type(response["current_date"]).__name__}.'
             )
-            logger.error(message)
             raise TypeError(message)
 
     if not isinstance(response['homeworks'], list):
-        logger.error('Ключ "homeworks" не содержит список.')
-        raise ('Ключ "homeworks" не содержит список.')
+        raise TypeError('Ключ "homeworks" не содержит список.')
 
 
 def parse_status(homework):
@@ -141,7 +121,6 @@ def parse_status(homework):
     homework_name = homework["homework_name"]
     status = homework["status"]
     if status not in HOMEWORK_VERDICTS:
-        logger.error(f'Неизвестный статус: {status}')
         raise ValueError(f'Неизвестный статус: {status}')
     verdict = HOMEWORK_VERDICTS[status]
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
@@ -150,21 +129,41 @@ def parse_status(homework):
 def send_error_message(error, last_message, bot):
     """Отправляет сообщение об ошибке, если оно отличается от последнего."""
     message = f'Сбой в работе программы: {error}'
-    logger.error(message)
     if message != last_message:
         send_message(bot, message)
         return message
     return last_message
 
 
+def send_new_status(message, last_message, bot):
+    """
+    Отправляет сообщение об изменившемся статусе домашней работы.
+
+    Если статус домашней работы изменился, отправляет сообщение в Телеграмм
+    и сохраняет новый статус в переменную last_message.
+    """
+    if message != last_message:
+        send_message(bot, message)
+        last_message = message
+        return True
+    return False
+
+
 def main():
     """Основная логика работы бота."""
-    if not check_tokens():
+    if check_tokens():
         sys.exit(1)
 
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     last_message = None
+    errors = (
+        requests.RequestException,
+        TypeError,
+        ValueError,
+        KeyError,
+        Exception,
+    )
 
     while True:
         try:
@@ -173,17 +172,13 @@ def main():
             homeworks = api_response.get("homeworks", [])
             if homeworks:
                 message = parse_status(homeworks[-1])
-                if message != last_message:
-                    send_message(bot, message)
-                    last_message = message
-                else:
-                    logger.debug('Нет новых статусов домашних работ.')
+                if send_new_status(message, last_message, bot):
+                    logger.debug(f'Сообщение отправлено: {message}')
             else:
                 logger.debug('Нет новых статусов домашних работ.')
-            current_date = api_response.get("current_date", timestamp)
-            timestamp = current_date if current_date else int(time.time())
+            timestamp = api_response.get("current_date", timestamp)
 
-        except (requests.RequestException, ValueError, Exception) as error:
+        except errors as error:
             last_message = send_error_message(error, last_message, bot)
 
         finally:
