@@ -3,9 +3,9 @@ import os
 import sys
 import time
 from http import HTTPStatus
+import json
 
 import requests
-import json
 from dotenv import load_dotenv
 from telebot import TeleBot, apihelper
 
@@ -98,14 +98,13 @@ def check_response(response):
         raise KeyError('Ответ сервера не содержит ключа "homeworks".')
 
     if 'current_date' not in response:
-        raise KeyError('Ответ сервера не содержит ключа "current_date".')
-    else:
-        if not isinstance(response['current_date'], (int)):
-            message = (
-                f'Значение ключа "current_date" должно быть числом, '
-                f'получено {type(response["current_date"]).__name__}.'
-            )
-            raise TypeError(message)
+        logger.error('Ответ сервера не содержит ключа "current_date".')
+    if not isinstance(response['current_date'], int):
+        message = (
+            f'Значение ключа "current_date" должно быть числом, '
+            f'получено {type(response["current_date"]).__name__}.'
+        )
+        logger.error(message)
 
     if not isinstance(response['homeworks'], list):
         raise TypeError('Ключ "homeworks" не содержит список.')
@@ -126,21 +125,14 @@ def parse_status(homework):
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
-def send_error_message(error, last_message, bot):
-    """Отправляет сообщение об ошибке, если оно отличается от последнего."""
-    message = f'Сбой в работе программы: {error}'
-    if message != last_message:
-        send_message(bot, message)
-        return message
-    return last_message
-
-
 def send_new_status(message, last_message, bot):
     """
-    Отправляет сообщение об изменившемся статусе домашней работы.
+    Отправляет сообщение об изменившемся статусе домашней работы или об ошибке.
 
     Если статус домашней работы изменился, отправляет сообщение в Телеграмм
-    и сохраняет новый статус в переменную last_message.
+    и сохраняет новый статус в переменную last_message. Если во время
+    работы программы возникла ошибка, которая не содержится
+    в предыдущем сообщении, отправляет сообщение об ошибке.
     """
     if message != last_message:
         send_message(bot, message)
@@ -157,13 +149,6 @@ def main():
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     last_message = None
-    errors = (
-        requests.RequestException,
-        TypeError,
-        ValueError,
-        KeyError,
-        Exception,
-    )
 
     while True:
         try:
@@ -172,14 +157,13 @@ def main():
             homeworks = api_response.get("homeworks", [])
             if homeworks:
                 message = parse_status(homeworks[-1])
-                if send_new_status(message, last_message, bot):
-                    logger.debug(f'Сообщение отправлено: {message}')
+                send_new_status(message, last_message, bot)
             else:
                 logger.debug('Нет новых статусов домашних работ.')
             timestamp = api_response.get("current_date", timestamp)
 
-        except errors as error:
-            last_message = send_error_message(error, last_message, bot)
+        except Exception as error:
+            last_message = send_new_status(error, last_message, bot)
 
         finally:
             time.sleep(RETRY_PERIOD)
