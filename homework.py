@@ -42,6 +42,15 @@ stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
 
 
+class LoggingOnlyException(Exception):
+    """Класс исключений с разными уровнями логирования."""
+
+    def __init__(self, message):
+        """Инициализирует объект исключения."""
+        super().__init__(message)
+        message = message
+
+
 def check_tokens():
     """Проверяет доступность переменных окружения."""
     env_vars = {
@@ -98,13 +107,14 @@ def check_response(response):
         raise KeyError('Ответ сервера не содержит ключа "homeworks".')
 
     if 'current_date' not in response:
-        logger.error('Ответ сервера не содержит ключа "current_date".')
+        raise LoggingOnlyException(
+            'Ответ сервера не содержит ключа "current_date".')
     if not isinstance(response['current_date'], int):
         message = (
             f'Значение ключа "current_date" должно быть числом, '
             f'получено {type(response["current_date"]).__name__}.'
         )
-        logger.error(message)
+        raise LoggingOnlyException(message)
 
     if not isinstance(response['homeworks'], list):
         raise TypeError('Ключ "homeworks" не содержит список.')
@@ -136,9 +146,8 @@ def send_new_status(message, last_message, bot):
     """
     if message != last_message:
         send_message(bot, message)
-        last_message = message
-        return True
-    return False
+        return message
+    return last_message
 
 
 def main():
@@ -149,6 +158,7 @@ def main():
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     last_message = None
+    last_error_message = None
 
     while True:
         try:
@@ -157,14 +167,18 @@ def main():
             homeworks = api_response.get("homeworks", [])
             if homeworks:
                 message = parse_status(homeworks[-1])
-                send_new_status(message, last_message, bot)
+                last_message = send_new_status(message, last_message, bot)
             else:
                 logger.debug('Нет новых статусов домашних работ.')
             timestamp = api_response.get("current_date", timestamp)
 
+        except LoggingOnlyException as error:
+            logging.error(error)
         except Exception as error:
-            last_message = send_new_status(error, last_message, bot)
-
+            if error != last_error_message:
+                last_error_message = error
+                send_message(bot, last_error_message)
+            logger.error(error)
         finally:
             time.sleep(RETRY_PERIOD)
 
