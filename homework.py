@@ -45,11 +45,6 @@ logger.addHandler(stream_handler)
 class LoggingOnlyException(Exception):
     """Класс исключений с разными уровнями логирования."""
 
-    def __init__(self, message):
-        """Инициализирует объект исключения."""
-        super().__init__(message)
-        message = message
-
 
 def check_tokens():
     """Проверяет доступность переменных окружения."""
@@ -135,19 +130,15 @@ def parse_status(homework):
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
-def send_new_status(message, last_message, bot):
+def send_new_status(message, bot):
     """
     Отправляет сообщение об изменившемся статусе домашней работы или об ошибке.
 
-    Если статус домашней работы изменился, отправляет сообщение в Телеграмм
-    и сохраняет новый статус в переменную last_message. Если во время
-    работы программы возникла ошибка, которая не содержится
+    Если статус домашней работы изменился, отправляет сообщение в Телеграмм.
+    Если во время работы программы возникла ошибка, которая не содержится
     в предыдущем сообщении, отправляет сообщение об ошибке.
     """
-    if message != last_message:
-        send_message(bot, message)
-        return message
-    return last_message
+    send_message(bot, message)
 
 
 def main():
@@ -158,7 +149,6 @@ def main():
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     last_message = None
-    last_error_message = None
 
     while True:
         try:
@@ -167,7 +157,9 @@ def main():
             homeworks = api_response.get("homeworks", [])
             if homeworks:
                 message = parse_status(homeworks[-1])
-                last_message = send_new_status(message, last_message, bot)
+                if message != last_message:
+                    last_message = message
+                    send_new_status(last_message, bot)
             else:
                 logger.debug('Нет новых статусов домашних работ.')
             timestamp = api_response.get("current_date", timestamp)
@@ -175,9 +167,10 @@ def main():
         except LoggingOnlyException as error:
             logging.error(error)
         except Exception as error:
-            if error != last_error_message:
-                last_error_message = error
-                send_message(bot, last_error_message)
+            message = f'Сбой в работе программы: {error}'
+            if message != last_message:
+                last_message = message
+                send_message(bot, last_message)
             logger.error(error)
         finally:
             time.sleep(RETRY_PERIOD)
