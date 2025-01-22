@@ -130,7 +130,7 @@ def parse_status(homework):
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
-def send_new_status(message, bot):
+def send_new_status(bot, message, last_message):
     """
     Отправляет сообщение об изменившемся статусе домашней работы или об ошибке.
 
@@ -138,7 +138,10 @@ def send_new_status(message, bot):
     Если во время работы программы возникла ошибка, которая не содержится
     в предыдущем сообщении, отправляет сообщение об ошибке.
     """
-    send_message(bot, message)
+    if message != last_message:
+        send_message(bot, message)
+        return message
+    return last_message
 
 
 def main():
@@ -157,9 +160,7 @@ def main():
             homeworks = api_response.get("homeworks", [])
             if homeworks:
                 message = parse_status(homeworks[-1])
-                if message != last_message:
-                    last_message = message
-                    send_new_status(last_message, bot)
+                last_message = send_new_status(bot, message, last_message)
             else:
                 logger.debug('Нет новых статусов домашних работ.')
             timestamp = api_response.get("current_date", timestamp)
@@ -168,9 +169,7 @@ def main():
             logging.error(error)
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
-            if message != last_message:
-                last_message = message
-                send_message(bot, last_message)
+            last_message = send_new_status(bot, message, last_message)
             logger.error(error)
         finally:
             time.sleep(RETRY_PERIOD)
